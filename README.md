@@ -1,6 +1,6 @@
 # Machine learning model for predicting bloodstream infections in haematological malignancies with febrile neutropenia
 
-This repository contains the Python Notebook used for generating results, figures and tables published in the article: Antonio Gallardo-Pizarro, Christian Teijón-Lumbreras, Carolina Garcia-Vidal, et al. "Machine learning model for predicting bloodstream infections in haematological malignancies with febrile neutropenia".
+This repository contains the R Notebook used for generating the results, figures and tables published in the article: Antonio Gallardo-Pizarro, Christian Teijón-Lumbreras, Carolina Garcia-Vidal, et al. "Machine learning model for predicting bloodstream infections in haematological malignancies with febrile neutropenia".
 
 ## Terms of use
 
