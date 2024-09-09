@@ -1,0 +1,275 @@
+---
+title: "Clustering Mixed Data FN"
+author: "Antonio Gallardo Pizarro"
+date: "2023-08-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+#library(tcltk)
+library(readxl)
+
+#ruta_archivo <- tclvalue(tkgetOpenFile())
+ruta_archivo = "./b_epi_nf_treats.xlsx"
+FN <- read_excel(ruta_archivo)
+```
+
+```{r}
+# Renombrar algunas variables
+colnames(FN)[colnames(FN) == "Leucemia_aguda"] <- "Acute_leukemia"
+colnames(FN)[colnames(FN) == "Linfoma"] <- "Lymphoma"
+colnames(FN)[colnames(FN) == "atcd_cart"] <- "CART"
+
+# Crear la varible outcome_hemoc_nocons_pos
+FN$outcome_hemoc_nocons_pos <- FN$outcome_hemoc_pos
+
+condition <- (FN$outcome_hemoc_cons_pos == 1 &
+              !(FN$outcome_hemoc_bgn_pos == 1 & FN$outcome_hemoc_cons_pos == 1) &
+              !(FN$outcome_hemoc_aureus_pos == 1 & FN$outcome_hemoc_cons_pos == 1) &
+              !(FN$outcome_hemoc_ec_fec_pos == 1 & FN$outcome_hemoc_cons_pos == 1) &
+              !(FN$outcome_hemoc_ec_faec_pos == 1 & FN$outcome_hemoc_cons_pos == 1) &
+              !(FN$outcome_hemoc_strept_pos == 1 & FN$outcome_hemoc_cons_pos == 1))
+
+FN$outcome_hemoc_nocons_pos <- ifelse(condition, 0, FN$outcome_hemoc_nocons_pos)
+```
+# Modelo KAMILA k-3
+```{r}
+library(kamila)
+library(zoo)
+
+# Variables numéricas y categóricas incluidas en el modelo:
+num_vars <- c("temp_axi_max", "PAS_min", "FC_max", "PCR_max", "neutrofilos_min", "admission_to_nf_days")
+cat_vars <- c("Acute_leukemia", "Lymphoma", "treat_atcd_qt_CICLOFOSFAMIDA", "treat_cart", "atcd_transfusion")
+
+# Datos numéricos escalados e imputados con la mediana
+scaled_data <- scale(FN[, num_vars])
+scaled_data <- as.data.frame(scaled_data) # tal como hablamos usando scale
+scaled_data <- na.aggregate(scaled_data, FUN = median) # Imputación de NA
+
+# Datos categóricos
+data_cat <- FN[, cat_vars]
+
+# Convertir variables categóricas a factores
+for (var in cat_vars) {
+  data_cat[[var]] <- as.factor(data_cat[[var]])
+}
+
+# Combina los datos numéricos y categóricos
+data_model_BSI <- data.frame(scaled_data, data_cat)
+
+# Separamos las variables cuantitativas y cualitativas en dos conjuntos de datos
+conVar <- data_model_BSI[, num_vars]
+catFactor <- data_model_BSI[, cat_vars]
+
+# Establecemos la cantidad de clusters que queremos y el número de inicializaciones
+num_clusters <- 3
+num_init <- 1000
+
+set.seed(123) 
+kam_results_BSI <- kamila(
+  conVar = conVar,
+  catFactor = catFactor,
+  numClust = num_clusters,
+  numInit = num_init,
+  verbose = FALSE
+)
+
+kam_results_BSI
+```
+
+```{r}
+# Lista de variables outcomes
+outcome_vars <- c("outcome_hemoc_pos","outcome_hemoc_nocons_pos", "outcome_hemoc_mdr_pos")
+data_outcome <- FN[, outcome_vars]
+
+# Combina los datos numéricos, categóricos y de outcomes
+data_prueba_BSI <- data.frame(scaled_data, data_cat, data_outcome)
+
+# k-3
+data_prueba_BSI_kam<-data_prueba_BSI
+data_prueba_BSI_kam$cluster <- kam_results_BSI$finalMemb
+
+for (var in outcome_vars) {
+  data_prueba_BSI_kam[[var]] <- ifelse(data_prueba_BSI_kam[[var]] == 1, "True", "False")
+  data_prueba_BSI_kam[[var]] <- as.factor(data_prueba_BSI_kam[[var]])
+}
+
+for (var in outcome_vars) {
+  tab <- table(data_prueba_BSI_kam[[var]], data_prueba_BSI_kam$cluster)
+  tab_prop <- prop.table(tab, 2)
+  
+  print(paste("Tabla de contingencia para", var, ":"))
+  print(tab)
+  
+  print(paste("Porcentajes para", var, ":"))
+  print(tab_prop)
+}
+```
+```{r}
+library(ggplot2)
+library(factoextra)
+library(FactoMineR)
+
+# FAMD
+res.famd_BSI <- FAMD(data_model_BSI , graph = TRUE)
+```
+```{r}
+library(plotly)
+
+# Crear un nuevo dataframe con las coordenadas de FAMD y los resultados de KAMILA
+val_df <- as.data.frame(res.famd_BSI$ind)
+data_kamila_with_famd_BSI <- cbind(data_model_BSI, val_df[, 1:3])
+
+
+colors <- c('#FFA500','#9400D3','#3CB371')
+
+p_kamila_BSI <- plot_ly(data_kamila_with_famd_BSI, 
+             x = ~coord.Dim.1, 
+             y = ~coord.Dim.2, 
+             z = ~coord.Dim.3,
+             color = ~factor(kam_results_BSI$finalMemb), 
+             colors = colors) %>%
+  add_markers(size = 6, opacity = 0.7) %>%
+  layout(scene = list(xaxis = list(title = 'Dimension 1'),
+                      yaxis = list(title = 'Dimension 2'),
+                      zaxis = list(title = 'Dimension 3'))) %>%
+  layout(legend = list(title = "K-cluster"))
+
+p_kamila_BSI
+```
+
+```{r}
+library(scatterplot3d)
+
+colors <- c('#9400D3','#3CB371', '#FFA500')
+
+# Extraer las asignaciones de clúster como factores
+cluster_assignments <- factor(kam_results_BSI$finalMemb)
+
+# Crear el mapa de colores
+color_map <- colors[as.numeric(cluster_assignments)]
+
+s3d <- scatterplot3d(data_kamila_with_famd_BSI$coord.Dim.1, 
+              data_kamila_with_famd_BSI$coord.Dim.2, 
+              data_kamila_with_famd_BSI$coord.Dim.3, 
+              color = color_map,
+              pch = 16, 
+              main = "",
+              xlab = "Dimension 1",
+              ylab = "Dimension 2",
+              zlab = "Dimension 3",
+              grid = TRUE, # Añadir una cuadrícula
+              box = FALSE, # Añadir un cuadro alrededor del gráfico
+              cex.axis = 1, # Tamaño de las etiquetas del eje
+              cex.lab = 1) # Tamaño de las etiquetas del eje principal
+
+legend("topright", legend = levels(cluster_assignments),
+       col = colors, pch = 16, cex = 1.2,
+       title = "Clusters")
+```
+
+```{r}
+library(cluster)
+
+# Calcular la distancia de Gower
+gower_dist <- daisy(data_model_BSI, metric = "gower")
+
+# Calcular los valores de la silueta utilizando la distancia de Gower
+sil_values <- silhouette(kam_results_BSI$finalMemb, dist = gower_dist)
+
+# Calcular el promedio general del coeficiente de Silhouette
+avg_sil <- mean(sil_values[, 3])
+
+p1 <- plot(sil_values, col = c('#9400D3','#3CB371', '#FFA500'), border = NA, main = paste(""))
+```
+## Exportar los resultados a un nuevo Excel para hacer los cálculos
+```{r}
+selected_num_vars <- FN[, num_vars]
+selected_cat_vars <- FN[, cat_vars]
+finalMemb_column <- kam_results_BSI$finalMemb
+selected_outcome_vars <- FN[, outcome_vars]
+mortality_vars<-c("exitus_30d", "exitus_60d")
+selected_mortality<-FN[, mortality_vars]
+
+data_analysis_cluster <- data.frame(selected_num_vars, selected_cat_vars, finalMemb_column, selected_outcome_vars, selected_mortality)
+
+library(writexl)
+
+write_xlsx(data_analysis_cluster, "cluster_kamila.xlsx")
+```
+
+
+# K-Prototype k=3
+```{r}
+library(clustMixType)
+
+# Variables numéricas y categóricas incluidas en el modelo:
+num_vars <- c("temp_axi_max", "PAS_min", "FC_max", "PCR_max", "neutrofilos_min", "admission_to_nf_days")
+cat_vars <- c("Acute_leukemia", "Lymphoma", "treat_atcd_qt_CICLOFOSFAMIDA", "treat_cart", "atcd_transfusion")
+
+# Datos numéricos escalados e imputados con la mediana
+scaled_data <- scale(FN[, num_vars])
+scaled_data <- as.data.frame(scaled_data)
+scaled_data <- na.aggregate(scaled_data, FUN = median) # Imputación de NA
+
+# Datos categóricos
+data_cat <- FN[, cat_vars]
+
+# Convertir variables categóricas a factores
+for (var in cat_vars) {
+  data_cat[[var]] <- as.factor(data_cat[[var]])
+}
+
+# Combina los datos numéricos y categóricos
+data_model_BSI <- data.frame(scaled_data, data_cat)
+
+# Número de clústeres
+num_clusters <- 3
+
+# Agrupación de prototipos con kproto
+set.seed(123)
+kp3_BSI <- kproto(data_model_BSI, k = num_clusters, diss = "euclidean")
+```
+
+```{r}
+# k-3
+data_prueba_BSI_kp3<-data_prueba_BSI #ya lo teníamos del modelo anterior (une numéricas, categóricas y outcome)
+data_prueba_BSI_kp3$cluster <- kp3_BSI$cluster
+
+for (var in outcome_vars) {
+  data_prueba_BSI_kp3[[var]] <- ifelse(data_prueba_BSI_kp3[[var]] == 1, "True", "False")
+  data_prueba_BSI_kp3[[var]] <- as.factor(data_prueba_BSI_kp3[[var]])
+}
+
+for (var in outcome_vars) {
+  tab <- table(data_prueba_BSI_kp3[[var]], data_prueba_BSI_kp3$cluster)
+  tab_prop <- prop.table(tab, 2)
+  
+  print(paste("Tabla de contingencia para", var, ":"))
+  print(tab)
+  
+  print(paste("Porcentajes para", var, ":"))
+  print(tab_prop)
+}
+```
+```{r}
+library(cluster)
+
+# Calcular la distancia de Gower
+gower_dist <- daisy(data_model_BSI, metric = "gower")
+
+# Calcular los valores de la silueta utilizando la distancia de Gower
+sil_values_kp <- silhouette(kp3_BSI$cluster, dist = gower_dist)
+
+# Calcular el promedio general del coeficiente de Silhouette
+avg_sil_kp <- mean(sil_values_kp[, 3])
+
+p2 <- plot(sil_values_kp, col = c("#3CB371", "#FFA500", "#9400D3"), border = NA, main = paste(""))
+```
+
+
+
+
